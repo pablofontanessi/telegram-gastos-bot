@@ -14,7 +14,7 @@ import gspread
 from gspread.exceptions import APIError, SpreadsheetNotFound
 
 # --------- CONFIGURACIÓN (editar aquí) ----------
-TOKEN = "7666727164:AAFjxLzuqqmPn7YRGD_VpZ_35JlIXRQLrA8"         # <-- pega tu token de BotFather aquí
+TOKEN = os.getenv("BOT_TOKEN")       # <-- pega tu token de BotFather aquí
 CREDENTIALS_FILE = "google_credentials.json" # <-- nombre del JSON que descargaste
 SHEET_NAME = "CuentasBOT"               # <-- nombre del Google Sheet (tal como aparece en Drive)
 # -------------------------------------------------
