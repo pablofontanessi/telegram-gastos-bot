@@ -182,7 +182,7 @@ async def main():
     try:
         gc = init_gspread_from_env()
         # Nombre exacto de tu sheet
-        SHEET_NAME = "MiSheetDeGastos"
+        SHEET_NAME = "CuentasBOT"
         sh = gc.open(SHEET_NAME)
         sheet = sh.sheet1  # primera hoja
     except Exception as e:
