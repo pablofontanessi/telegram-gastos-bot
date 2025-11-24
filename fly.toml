@@ -1,22 +1,18 @@
-# fly.toml app configuration file generated for repo-bot on 2025-11-24T16:14:19-03:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
+# fly.toml app configuration for Telegram bot (polling)
+# No HTTP, no ports, no autosuspensión
 
-app = 'repo-bot'
-primary_region = 'gru'
+app = "repo-bot"
+primary_region = "gru"
 
 [build]
+  # El Dockerfile será detectado automáticamente
 
-[http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = 'stop'
-  auto_start_machines = true
-  min_machines_running = 0
-  processes = ['app']
+# Ejecutar el bot como proceso principal (sin servidor HTTP)
+[processes]
+  bot = "python bot_gastos.py"
 
+# Configuración de la VM
 [[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
+  memory = "1gb"
+  cpu_kind = "shared"
   cpus = 1

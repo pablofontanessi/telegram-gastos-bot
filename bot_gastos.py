@@ -33,6 +33,7 @@ TOKEN = os.getenv("BOT_TOKEN")  # TOKEN desde secrets de Fly.io
 # Regex para validar montos tipo "100" o "100.50"
 AMOUNT_REGEX = re.compile(r"^\d+(\.\d+)?$")
 
+ALLOWED_USERS = [810438708 , 845929316]
 
 # -------------------------------------------------------------------
 #               CARGA DE CREDENCIALES DESDE SECRETS (Fly.io)
@@ -64,7 +65,18 @@ def init_gspread_from_env():
 #                          HANDLER PRINCIPAL
 # -------------------------------------------------------------------
 
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+     # --- VALIDAR USUARIO ---
+    user_id = update.effective_user.id
+    if user_id not in ALLOWED_USERS:
+        await update.message.reply_text(
+            "❌ No estás autorizado para usar este bot."
+        )
+        return
+    
     """Procesa cada mensaje de texto, valida, parsea y guarda en Google Sheets."""
     text = (update.message.text or "").strip()
 
@@ -90,12 +102,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     #   3 tokens  -> descripcion + monto + categoria
     #   >=4 tokens -> descripcion + monto + categoria + lugar
     # -------------------------------------------------------------------
-
+    if user_id == 845929316:
+            user = "Colilove"
+    else:
+            user = "Polalove"
+    
     if len(tokens) == 2:
         description = tokens[0]
         amount_token = tokens[1]
         category = "General"
         lugar = "N/A"
+        
 
     elif len(tokens) == 3:
         description = tokens[0]
@@ -133,7 +150,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     fecha = date.today().isoformat()
 
-    row = [fecha, description, amount_str, category, lugar]
+    row = [fecha, description, amount_str, category, lugar,user]
 
     # -------------------------------------------------------------------
     #                     GUARDAR EN GOOGLE SHEETS
@@ -167,7 +184,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Descripción: {description}\n"
         f"Monto: {amount_str}\n"
         f"Categoría: {category}\n"
-        f"Lugar: {lugar}"
+        f"Lugar: {lugar}\n"
+        f"Usuario: {user}"
     )
 
 
