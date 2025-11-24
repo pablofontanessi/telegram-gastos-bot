@@ -169,13 +169,7 @@ async def main():
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    # NO usar asyncio.run()
-    try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
-    except RuntimeError:
-        # En caso de que VSCode ya tenga un loop activo:
-        loop = asyncio.get_running_loop()
-        loop.create_task(main())
-        loop.run_forever()
+    import asyncio
+    asyncio.run(main())
+
 
