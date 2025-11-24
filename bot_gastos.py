@@ -1,7 +1,7 @@
 ﻿# bot_gastos.py
 # Requisitos: python-telegram-bot v20+, gspread, google-auth
 # Modifica únicamente: TOKEN, CREDENTIALS_FILE, SHEET_NAME
-
+import os
 import asyncio
 import re
 from datetime import date
