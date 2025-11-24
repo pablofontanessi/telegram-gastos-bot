@@ -1,197 +1,209 @@
-﻿# bot_gastos.py
-# Requisitos: python-telegram-bot v20+, gspread, google-auth
-# Modifica únicamente: TOKEN, CREDENTIALS_FILE, SHEET_NAME
+﻿#!/usr/bin/env python3
 import os
-import asyncio
+import json
 import re
-from datetime import date
+import asyncio
 import logging
+from datetime import date
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    ContextTypes,
+    filters
+)
 
 import gspread
-from gspread.exceptions import APIError, SpreadsheetNotFound
+from google.oauth2.service_account import Credentials
 
-# --------- CONFIGURACIÓN (editar aquí) ----------
-TOKEN = os.getenv("BOT_TOKEN")       # <-- pega tu token de BotFather aquí
-CREDENTIALS_FILE = "google_credentials.json" # <-- nombre del JSON que descargaste
-SHEET_NAME = "CuentasBOT"               # <-- nombre del Google Sheet (tal como aparece en Drive)
-# -------------------------------------------------
 
-# Logging básico
+# -------------------------------------------------------------------
+#                       CONFIGURACIÓN Y LOGGING
+# -------------------------------------------------------------------
+
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Regex para validar monto: enteros o decimales con punto (ej: 450, 12.50)
+TOKEN = os.getenv("BOT_TOKEN")  # TOKEN desde secrets de Fly.io
+
+# Regex para validar montos tipo "100" o "100.50"
 AMOUNT_REGEX = re.compile(r"^\d+(\.\d+)?$")
 
-# Inicializar cliente gspread una vez (se intentará al iniciar el bot)
-def init_gspread_client(credentials_file: str):
-    try:
-        gc = gspread.service_account(filename=credentials_file)
-        return gc
-    except Exception as e:
-        logger.exception("Error al inicializar gspread con '%s': %s", credentials_file, e)
-        raise
 
-# Función que hace append en la hoja (bloqueante) — la ejecutamos en executor para no bloquear el loop async.
-def append_row_to_sheet(sheet, row):
-    # append_row usa la API y es bloqueante
-    sheet.append_row(row, value_input_option="USER_ENTERED")
+# -------------------------------------------------------------------
+#               CARGA DE CREDENCIALES DESDE SECRETS (Fly.io)
+# -------------------------------------------------------------------
 
-# Handler asíncrono para mensajes de texto
+def init_gspread_from_env():
+    """
+    Lee GOOGLE_CREDENTIALS del entorno (Fly.io secrets),
+    inicializa Credentials y devuelve gspread client autorizado.
+    """
+    creds_json = os.getenv("GOOGLE_CREDENTIALS")
+    if not creds_json:
+        logger.error("GOOGLE_CREDENTIALS no encontrado en variables de entorno.")
+        raise SystemExit("Falta el secreto GOOGLE_CREDENTIALS")
+
+    creds_dict = json.loads(creds_json)
+
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(credentials)
+    return gc
+
+
+# -------------------------------------------------------------------
+#                          HANDLER PRINCIPAL
+# -------------------------------------------------------------------
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Procesa cada mensaje de texto, valida, parsea y guarda en Google Sheets."""
     text = (update.message.text or "").strip()
-    chat_id = update.effective_chat.id
 
     if not text:
         await update.message.reply_text(
-            "Mensaje vacío. Envía: descripcion monto [categoria]\nEjemplo: super 450 comida"
+            "Mensaje vacío. Usa: descripcion monto [categoria] [lugar]\n"
+            "Ejemplo: super 450 comida carrefour"
         )
         return
 
-    # Separar tokens por espacios. Lógica:
-    # - Si hay 2 tokens: descripcion (puede ser una sola palabra) y monto -> categoria = "General"
-    # - Si hay >=3 tokens: categoría = ultimo token, monto = penúltimo token, descripcion = resto (puede tener espacios)
-    # Analizar tokens
     tokens = text.split()
 
     if len(tokens) < 2:
         await update.message.reply_text(
-            "Error: formato inválido.\nUsa: descripcion monto [categoria] [lugar]\nEj: super 450 comida carrefour"
+            "Formato inválido.\nUsa: descripcion monto [categoria] [lugar]\n"
+            "Ejemplo: super 450 comida carrefour"
         )
         return
 
-    # Caso mínimo: 2 tokens -> descripcion + monto
+    # -------------------------------------------------------------------
+    #   PARSEO FLEXIBLE:
+    #   2 tokens  -> descripcion + monto
+    #   3 tokens  -> descripcion + monto + categoria
+    #   >=4 tokens -> descripcion + monto + categoria + lugar
+    # -------------------------------------------------------------------
+
     if len(tokens) == 2:
         description = tokens[0]
         amount_token = tokens[1]
         category = "General"
         lugar = "N/A"
 
-    # Caso con 3 tokens -> descripcion + monto + categoria
     elif len(tokens) == 3:
         description = tokens[0]
         amount_token = tokens[1]
         category = tokens[2]
         lugar = "N/A"
 
-    # Caso con 4 o más tokens -> descripcion puede tener espacios
     else:
-        # último token = lugar
+        # Caso: DESCRIPCIÓN con espacios
+        # tokens[-1] = lugar
+        # tokens[-2] = categoría
+        # tokens[-3] = monto
+        # el resto = descripción
         lugar = tokens[-1]
-
-        # anteúltimo token = categoría
         category = tokens[-2]
-
-        # tercer token desde el final = monto
         amount_token = tokens[-3]
-
-        # lo anterior son tokens de la descripción
         description = " ".join(tokens[:-3])
 
-
-    # Validar monto (enteros o decimales con punto)
+    # -------------------------------------------------------------------
+    #                     VALIDAR MONTO
+    # -------------------------------------------------------------------
     if not AMOUNT_REGEX.match(amount_token):
         await update.message.reply_text(
-            "Monto inválido. Usa sólo dígitos o decimal con punto (ej: 450 o 12.50).\nEjemplo: super 450 comida"
+            "Monto inválido. Usa solo números o decimal con punto.\n"
+            "Ejemplo: super 450 comida carrefour"
         )
         return
 
-    # Convertir monto a formato estándar (dos decimales), pero guardamos como texto tal cual o como float formateado
     try:
         amount_value = float(amount_token)
-        # opcional: formatear a 2 decimales
         amount_str = f"{amount_value:.2f}"
-    except Exception:
-        await update.message.reply_text(
-            "No se pudo procesar el monto. Asegúrate de enviar números (ej: 450 o 12.50)."
-        )
+    except:
+        await update.message.reply_text("No se pudo procesar el monto.")
         return
 
-    fecha = date.today().isoformat()  # YYYY-MM-DD
+    fecha = date.today().isoformat()
 
-    # Preparar fila
     row = [fecha, description, amount_str, category, lugar]
 
-
-    # Intentar obtener el cliente gspread y la hoja desde el objeto en context (inicializado en main)
+    # -------------------------------------------------------------------
+    #                     GUARDAR EN GOOGLE SHEETS
+    # -------------------------------------------------------------------
     gc = context.application.bot_data.get("gspread_client")
     sheet = context.application.bot_data.get("sheet_instance")
 
     if gc is None or sheet is None:
-        await update.message.reply_text(
-            "Error del servidor: no se pudo conectar a Google Sheets. Contacta al administrador."
-        )
+        await update.message.reply_text("Error interno del servidor.")
         logger.error("gspread_client o sheet_instance no inicializados.")
         return
 
-    # Ejecutar append en executor para no bloquear
     loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(None, append_row_to_sheet, sheet, row)
-    except SpreadsheetNotFound:
-        await update.message.reply_text(
-            f"Error: la planilla '{SHEET_NAME}' no se encontró. Revisa el nombre del Sheet en la configuración."
+        # Ejecutamos append_row en executor ya que es bloqueante
+        await loop.run_in_executor(
+            None,
+            lambda: sheet.append_row(row, value_input_option="USER_ENTERED")
         )
-        logger.exception("SpreadsheetNotFound: %s", SHEET_NAME)
-        return
-    except APIError as e:
-        await update.message.reply_text(
-            "Error al acceder a Google Sheets (API). Revisa credenciales y permisos."
-        )
-        logger.exception("APIError al hacer append: %s", e)
-        return
     except Exception as e:
+        logger.exception("Error al guardar en Sheets: %s", e)
         await update.message.reply_text(
-            "Error inesperado al guardar. Revisa los logs del bot."
+            "Error al guardar en Google Sheets. Revisa logs."
         )
-        logger.exception("Error al hacer append a la hoja: %s", e)
         return
 
     # Confirmación al usuario
     await update.message.reply_text(
-    f"Guardado Pol! ✅\nFecha: {fecha}\nDescripción: {description}\nMonto: {amount_str}\nCategoría: {category}\nLugar: {lugar}")
+        f"Guardado 🟢\n"
+        f"Fecha: {fecha}\n"
+        f"Descripción: {description}\n"
+        f"Monto: {amount_str}\n"
+        f"Categoría: {category}\n"
+        f"Lugar: {lugar}"
+    )
 
 
+# -------------------------------------------------------------------
+#                  INICIALIZACIÓN DEL BOT (Fly.io)
+# -------------------------------------------------------------------
 
 async def main():
-    # Inicializar aplicación telegram
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Inicializar gspread y abrir sheet (primer hoja)
+    # Inicializar Google Sheets desde secrets
     try:
-        gc = init_gspread_client(CREDENTIALS_FILE)
+        gc = init_gspread_from_env()
+        # Nombre exacto de tu sheet
+        SHEET_NAME = "MiSheetDeGastos"
         sh = gc.open(SHEET_NAME)
         sheet = sh.sheet1  # primera hoja
     except Exception as e:
         logger.exception("Error inicializando Google Sheets: %s", e)
-        raise
+        raise SystemExit("No se pudo inicializar Google Sheets.")
 
-    # Guardar cliente y sheet
     app.bot_data["gspread_client"] = gc
     app.bot_data["sheet_instance"] = sheet
 
-    # Añadir handler
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    )
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # IMPORTANTE: inicializar manualmente por pasos
+    # Inicialización manual recomendada
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
 
-    print("Bot iniciado. Esperando mensajes...")
+    logger.info("Bot iniciado en Fly.io. Esperando mensajes...")
 
-    # Esperar indefinidamente
+    # Mantener proceso corriendo
     await asyncio.Event().wait()
 
+
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
-
-
