@@ -56,22 +56,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Separar tokens por espacios. Lógica:
     # - Si hay 2 tokens: descripcion (puede ser una sola palabra) y monto -> categoria = "General"
     # - Si hay >=3 tokens: categoría = ultimo token, monto = penúltimo token, descripcion = resto (puede tener espacios)
+    # Analizar tokens
     tokens = text.split()
+
     if len(tokens) < 2:
         await update.message.reply_text(
-            "Error: formato inválido. Debes enviar al menos descripción y monto.\nEjemplo válido: super 450 comida"
+            "Error: formato inválido.\nUsa: descripcion monto [categoria] [lugar]\nEj: super 450 comida carrefour"
         )
         return
 
+    # Caso mínimo: 2 tokens -> descripcion + monto
     if len(tokens) == 2:
         description = tokens[0]
         amount_token = tokens[1]
         category = "General"
+        lugar = "N/A"
+
+    # Caso con 3 tokens -> descripcion + monto + categoria
+    elif len(tokens) == 3:
+        description = tokens[0]
+        amount_token = tokens[1]
+        category = tokens[2]
+        lugar = "N/A"
+
+    # Caso con 4 o más tokens -> descripcion puede tener espacios
     else:
-        # >=3 tokens
-        category = tokens[-1]
-        amount_token = tokens[-2]
-        description = " ".join(tokens[:-2])
+        # último token = lugar
+        lugar = tokens[-1]
+
+        # anteúltimo token = categoría
+        category = tokens[-2]
+
+        # tercer token desde el final = monto
+        amount_token = tokens[-3]
+
+        # lo anterior son tokens de la descripción
+        description = " ".join(tokens[:-3])
+
 
     # Validar monto (enteros o decimales con punto)
     if not AMOUNT_REGEX.match(amount_token):
@@ -94,7 +115,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fecha = date.today().isoformat()  # YYYY-MM-DD
 
     # Preparar fila
-    row = [fecha, description, amount_str, category]
+    row = [fecha, description, amount_str, category, lugar]
+
 
     # Intentar obtener el cliente gspread y la hoja desde el objeto en context (inicializado en main)
     gc = context.application.bot_data.get("gspread_client")
@@ -132,8 +154,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Confirmación al usuario
     await update.message.reply_text(
-        f"Guardado ✅\nFecha: {fecha}\nDescripción: {description}\nMonto: {amount_str}\nCategoría: {category}"
-    )
+    f"Guardado Pol! ✅\nFecha: {fecha}\nDescripción: {description}\nMonto: {amount_str}\nCategoría: {category}\nLugar: {lugar}")
+
 
 
 async def main():
